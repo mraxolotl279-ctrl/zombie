@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Zombie Shooter Desktop</title>
+<style>
+html, body { margin:0; padding:0; overflow:hidden; background:#071019; }
+canvas { display:block; background:#0a1118; }
+#hud { position:fixed; top:8px; left:8px; color:#e6f7f5; font-family:sans-serif; font-weight:bold; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="hud">
+<div id="score">Score: 0</div>
+<div id="wave">Wave: 1</div>
+<div id="health">Health: 100</div>
+<div id="weapon">Weapon: AUTO</div>
+</div>
+<script>
+// --- CONFIG ---
+const MAX_ZOMBIES = 50;
+const MAX_PARTICLES = 120;
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let W=window.innerWidth, H=window.innerHeight;
+canvas.width=W; canvas.height=H;
+
+// --- AUDIO ---
+const SOUND_ENABLED = true;
+function makeAudio(src, vol=0.5){ const a=new Audio(src); a.volume=vol; a.preload='auto'; return a; }
+const s_shoot = makeAudio("https://cdn.pixabay.com/download/audio/2021/09/20/audio_5f1e77ec7d.mp3?filename=gunshot-1-153939.mp3",0.4);
+const s_zdead = makeAudio("https://cdn.pixabay.com/download/audio/2023/03/01/audio_d3141f2f63.mp3?filename=zombie-death-143850.mp3",0.35);
+
+// --- GAME STATE ---
+let player, zombies=[], bullets=[], particles=[], crates=[], obstacles=[];
+let score=0, wave=1, spawnTimer=0, gameOver=false;
+let keys={};
+
+// --- WEAPONS ---
+const weapons = {
+auto: {id:"AUTO", fireRate:90, bulletSpeed:14, damage:1, recoil:2.2, sound:s_shoot}
+};
+let currentWeapon = weapons.auto;
+document.getElementById('weapon').textContent = 'Weapon: '+currentWeapon.id;
+
+// --- INITIALIZE ---
+function reset(){
+zombies=[]; bullets=[]; particles=[]; crates=[]; obstacles=[];
+score=0; wave=1; spawnTimer=0; gameOver=false;
+player={x:W/2, y:H/2, r:28, speed:3.5, health:100, inv:0};
+document.getElementById('score').textContent='Score: 0';
+document.getElementById('wave').textContent='Wave: 1';
+document.getElementById('health').textContent='Health: 100';
+// obstacles
+for(let i=0;i<5;i++){
+const w=Math.random()*150+80, h=Math.random()*120+60;
+const x=Math.random()*(W-w-160)+80, y=Math.random()*(H-h-160)+80;
+obstacles.push({x,y,w,h});
+}
+}
+reset();
+
+// --- INPUT ---
+window.addEventListener('keydown',e=>keys[e.key.toLowerCase()]=true);
+window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+
+// --- SPAWN ZOMBIE ---
+function spawnZombie(){
+if(zombies.length>=MAX_ZOMBIES) return;
+let z={r:20+Math.random()*8,speed:1+Math.random(),hp:1+wave*0.5,maxHp:0};
+z.maxHp=z.hp;
+let side=Math.floor(Math.random()*4);
+if(side===0){ z.x=Math.random()*W; z.y=-60;}
+else if(side===1){ z.x=Math.random()*W; z.y=H+60;}
+else if(side===2){ z.x=-60; z.y=Math.random()*H;}
+else{ z.x=W+60; z.y=Math.random()*H;}
+zombies.push(z);
+}
+
+// --- BULLETS ---
+function spawnBullet(x,y,dx,dy){ bullets.push({x,y,dx,dy,size:6,life:2400}); }
+function spawnBlood(x,y,angle,magnitude,count=8){
+if(particles.length>MAX_PARTICLES)return;
+for(let i=0;i<count;i++){
+let a=angle+(Math.random()-0.5)*1.8;
+let s=Math.random()*4+1;
+particles.push({x,y,vx:Math.cos(a)*s*magnitude,vy:Math.sin(a)*s*magnitude,life:400+Math.random()*600,size:Math.random()*4+2,color:'#b6302a'});
+}
+}
+
+// --- UPDATE ---
+let lastShot=0;
+function update(dt){
+if(gameOver) return;
+// player movement
+let dx=0,dy=0;
+if(keys['w']) dy-=1; if(keys['s']) dy+=1;
+if(keys['a']) dx-=1; if(keys['d']) dx+=1;
+const norm=Math.hypot(dx,dy)||1;
+player.x+=dx/norm*player.speed*dt;
+player.y+=dy/norm*player.speed*dt;
+player.x=Math.max(player.r,Math.min(W-player.r,player.x));
+player.y=Math.max(player.r,Math.min(H-player.r,player.y));
+// zombies move
+for(let z of zombies){
+let ang=Math.atan2(player.y-z.y,player.x-z.x);
+z.x+=Math.cos(ang)*z.speed*dt;
+z.y+=Math.sin(ang)*z.speed*dt;
+}
+// bullets move & collisions
+for(let i=bullets.length-1;i>=0;i--){
+let b=bullets[i]; b.x+=b.dx*dt; b.y+=b.dy*dt; b.life-=dt;
+if(b.life<=0){ bullets.splice(i,1); continue; }
+for(let j=zombies.length-1;j>=0;j--){
+let z=zombies[j];
+let d2=(z.x-b.x)**2+(z.y-b.y)**2;
+if(d2<(z.r+b.size)**2){
+z.hp-=1; spawnBlood(b.x,b.y,Math.random()*Math.PI*2,0.7);
+bullets.splice(i,1);
+if(z.hp<=0){ score+=10; if(SOUND_ENABLED){ s_zdead.currentTime=0; s_zdead.play(); } zombies.splice(j,1); }
+break;
+}
+}
+}
+// spawn zombies
+spawnTimer+=dt;
+if(spawnTimer>1400){
+spawnTimer=0;
+spawnZombie();
+}
+}
+
+// --- SHOOTING ---
+function tryShooting(ts){
+if(keys[' ']){
+if(ts-lastShot>currentWeapon.fireRate){
+lastShot=ts;
+let ang=0;
+if(zombies.length>0){
+let nearest=zombies[0], d=Math.hypot(nearest.x-player.x,nearest.y-player.y);
+for(let z of zombies){ let distz=Math.hypot(z.x-player.x,z.y-player.y); if(distz<d){nearest=z; d=distz;} }
+ang=Math.atan2(nearest.y-player.y,nearest.x-player.x);
+} else ang=0;
+const dx=Math.cos(ang)*currentWeapon.bulletSpeed;
+const dy=Math.sin(ang)*currentWeapon.bulletSpeed;
+spawnBullet(player.x+Math.cos(ang)*player.r,player.y+Math.sin(ang)*player.r,dx,dy);
+if(SOUND_ENABLED){ currentWeapon.sound.currentTime=0; currentWeapon.sound.play(); }
+}
+}
+}
+
+// --- RENDER ---
+function render(){
+ctx.clearRect(0,0,W,H);
+// player
+ctx.fillStyle='#2fe0cf';
+ctx.beginPath();
+ctx.arc(player.x,player.y,player.r,0,Math.PI*2);
+ctx.fill();
+// bullets
+ctx.fillStyle='#ffe';
+for(let b of bullets){ ctx.beginPath(); ctx.arc(b.x,b.y,b.size,0,Math.PI*2); ctx.fill(); }
+// zombies
+for(let z of zombies){
+ctx.fillStyle='#2fe0cf';
+ctx.beginPath(); ctx.arc(z.x,z.y,z.r,0,Math.PI*2); ctx.fill();
+}
+}
+
+// --- MAIN LOOP ---
+let lastTs=performance.now();
+function loop(ts){
+const dt=Math.min(40,ts-lastTs);
+lastTs=ts;
+update(dt);
+tryShooting(ts);
+render();
+requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>
